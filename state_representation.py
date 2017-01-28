@@ -1,72 +1,145 @@
 import numpy as np
+from scipy.signal import convolve2d
 import matplotlib.pyplot as plt
+import itertools
 from math import floor
 from tqdm import tqdm
+import random
 
-def represent_state(uncovered, mines, n=4):
-    ret = np.zeros((n,n))-1
+N = 4 # board size
+M = 3 # mine count
 
-    for (i,j) in mines:
-        ret[i,j] = -2
+N2 = N * N
 
-    mask = 1
-    for i in range(n):
-        for j in range(n):
-            if uncovered & mask > 0:
-                if ret[i,j] == -2:
-                    return None #Invalid: a mine cannot be uncovered
-                ret[i,j] = 0
-                for di in [-1, 0, 1]:
-                    if i+di < 0 or i+di >= n:
-                        continue
-                    for dj in [-1, 0, 1]:
-                        if (di == 0 and dj == 0):
-                            continue;
-                        if (j+dj < 0 or j+dj >= n):
-                            continue
-                        if ret[i+di, j+dj] == -2:
-                            ret[i,j] += 1
-            mask *= 2
-    ret[ret == -2] = -1
-    return ret
+NUMS = [ord('0')+i for i in range(9)]
+UNKNOWN = ord('-')
+MINE = ord('X')
+BORDER = ord('#')
 
-def generate_three_mins(map_size):
-    states = []
-    for i in range(0, map_size * map_size):
-        for j in range(i + 1, map_size * map_size):
-            for k in range(j + 1, map_size * map_size):
-                states.append([(floor(i / map_size), i % map_size),(floor(j / map_size), j % map_size),(floor(k / map_size), k % map_size)])
-    return states
+UNKNOWN_BOARD = np.zeros((N+2, N+2), dtype=np.dtype('b')) + UNKNOWN
+def fill_borders(board):
+    board[0] = BORDER
+    board[N+1] = BORDER
+    board[:,0] = BORDER
+    board[:,N+1] = BORDER
 
-def generate_four_mins(map_size):
-    states = []
-    for i in range(0, map_size * map_size):
-        for j in range(i + 1, map_size * map_size):
-            for k in range(j + 1, map_size * map_size):
-                for w in range(k+1,map_size*map_size):
-                    states.append([(floor(i / map_size), i % map_size),(floor(j / map_size), j % map_size),(floor(k / map_size), k % map_size),(floor(w / map_size), w % map_size)])
-    return states
+CORDS = list(itertools.product(range(1, N+1), range(1, N+1)))
 
-def generate_mines(mine_count, n=4):
-    if mine_count == 3:
-        return generate_three_mins(n)
-    elif mine_count == 4:
-        return generate_four_mins(n)
+def hash_board(board):
+    return ''.join(map(chr, board.ravel()))
+
+def print_board(board):
+    if (isinstance(board, list)):
+        for b in board:
+            print_board(b)
+            print('~~~~~~~~')
     else:
-        raise Exception("Invalid mine count")
+        print('\n'.join([''.join([chr(cell) for cell in row]) for row in board]))
 
+def gen_mine_boards():
+    for comb in itertools.combinations(range(N2), M):
+        board = UNKNOWN_BOARD.copy()
+        for cord in comb:
+            board[CORDS[cord]] = MINE
+        fill_borders(board)
+        yield board
+mine_boards = list(gen_mine_boards())
 
-def generate_states(mine_counts=[3,4], n=2):
-    ret = []
+def gen_board_rotations(board):
     hashes = set()
-    for mine_count in mine_counts:
-        for mines in tqdm(generate_mines(mine_count, n)):
-            for uncovered in range(2**(n**2)):
-                state = represent_state(uncovered, mines, n)
-                if state is None:
-                    continue
-                state_hash = ','.join(map(str, state.ravel()))
-                if state_hash not in hashes:
-                    ret.append(state)
-                    hashes.add(state_hash)
-    return ret
+    for i in range(8):
+        h = hash_board(board)
+        if h not in hashes:
+            yield board
+            hashes.add(h)
+        board = np.rot90(board)
+        if i == 3:
+            board = board.T
+
+class EqSet(object):
+    def __init__(self, on_new=(lambda x,y: x)):
+        self.count = 0
+        self.map = {}
+        self.items = []
+        self.on_new = on_new
+
+    def to_id(self, board):
+        h = hash_board(board)
+        ret = self.map.get(h, None)
+        if ret is None:
+            board = board.copy()
+            for b in gen_board_rotations(board):
+                self.map[hash_board(b)] = self.count
+            ret = self.count
+            self.items.append(board)
+            self.on_new(board, self.count)
+            self.count += 1
+        return ret
+
+es_mine_boards = EqSet()
+for board in mine_boards:
+    es_mine_boards.to_id(board)
+
+es_states = EqSet()
+
+def recurse_states(counts, i, mask_limit):
+    if (i == N2):
+        es_states.to_id(counts)
+        return
+    cords = CORDS[i]
+    count = counts[cords]
+
+    counts[cords] = UNKNOWN
+    recurse_states(counts, i+1, mask_limit)
+
+    if count != -1: # not mine
+        counts[cords] = NUMS[count]
+        recurse_states(counts, i+1, mask_limit)
+
+    if (count > 0 and mask_limit > 0):
+        counts[cords] = MINE
+        recurse_states(counts, i+1, mask_limit - 1)
+
+    counts[cords] = count
+
+class Env(object):
+    def __init__(self):
+        self.mines = random.choice(mine_boards)
+        self.board = UNKNOWN_BOARD
+        self.max_uncover = -1
+
+    def do_action(cords, put_flag):
+        if (put_flag):
+            self.board[cords] = MINE
+            return (True, self.board)
+
+count_filter = np.zeros((3, 3)) + 1
+count_filter[1,1] = 0
+for board in tqdm(es_mine_boards.items):
+    is_mine = board == MINE
+    counts = convolve2d(is_mine, count_filter, mode='same').astype(int)
+    counts[is_mine] = -1
+    fill_borders(counts)
+    recurse_states(counts, 0, 0)
+#%%
+es_actions = EqSet()
+
+for board in tqdm(es_states.items):
+    is_unknown = board == UNKNOWN
+    is_border = board == BORDER
+    is_known = np.logical_not(np.logical_or(is_unknown, is_border))
+    counts = convolve2d(is_unknown, count_filter, mode='same').astype(int)
+    b = np.zeros_like(board)
+    b[is_known] = 10 * counts[is_known] + (board[is_known]-ord('0'))
+    b[is_border] = 100
+    b[is_unknown] = 101
+    for cords in CORDS:
+        if board[cords] != UNKNOWN:
+            continue
+        row, col = cords
+        es_actions.to_id(b[row-1:row+2, col-1:col+2])
+
+es_actions.count
+
+#%%
+#%%
