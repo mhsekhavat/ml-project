@@ -7,7 +7,9 @@ from tqdm import tqdm
 import random
 
 N = 4 # board size
-M = 3 # mine count
+M = 4 # mine count
+
+################################################ PART1
 
 N2 = N * N
 
@@ -102,17 +104,6 @@ def recurse_states(counts, i, mask_limit):
 
     counts[cords] = count
 
-class Env(object):
-    def __init__(self):
-        self.mines = random.choice(mine_boards)
-        self.board = UNKNOWN_BOARD
-        self.max_uncover = -1
-
-    def do_action(cords, put_flag):
-        if (put_flag):
-            self.board[cords] = MINE
-            return (True, self.board)
-
 count_filter = np.zeros((3, 3)) + 1
 count_filter[1,1] = 0
 for board in tqdm(es_mine_boards.items):
@@ -121,7 +112,10 @@ for board in tqdm(es_mine_boards.items):
     counts[is_mine] = -1
     fill_borders(counts)
     recurse_states(counts, 0, 0)
-#%%
+
+print("Game state count: {}".format(es_states.count))
+
+#################################################### Part2
 es_actions = EqSet()
 
 for board in tqdm(es_states.items):
@@ -139,7 +133,6 @@ for board in tqdm(es_states.items):
         row, col = cords
         es_actions.to_id(b[row-1:row+2, col-1:col+2])
 
-es_actions.count
+print(es_actions.count)
 
-#%%
 #%%
